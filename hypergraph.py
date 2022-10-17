@@ -89,7 +89,8 @@ class HGNN:
         node_dim=10,
         hyperedge_activation="tanh",
         node_activation="tanh",
-        pooling="mean"
+        node_pooling="mean",
+        hyperedge_pooling="mean"
     ):
         # cardinalities
         self.n_labels = n_labels
@@ -100,16 +101,33 @@ class HGNN:
         self.hyperedge_type_dim = hyperedge_type_dim
         self.hyperedge_dim = hyperedge_dim
         self.node_dim = node_dim
+        self.training_variables = []
         
-        if pooling == "mean":
-            self.pooling = lambda x: tf.math.reduce_mean(x, axis=1, keepdims=False)
-        elif pooling == "max":
-            self.pooling = lambda x: tf.math.reduce_max(x, axis=1, keepdims=False)
+        self.node_pooling = self.get_pooling(node_pooling)
+        self.hyperedge_pooling = self.get_pooling(hyperedge_pooling)
         
         # activations
         self.hyperedge_activation = tf.keras.activations.get(hyperedge_activation)
         self.node_activation = tf.keras.activations.get(node_activation)
         self.init()
+    
+    def get_pooling(self, pooling):
+        if pooling == "mean":
+            return lambda x: tf.math.reduce_mean(x, axis=1, keepdims=False)
+        elif pooling == "max":
+            return lambda x: tf.math.reduce_max(x, axis=1, keepdims=False)
+        elif pooling == "sum":
+            return lambda x: tf.math.reduce_sum(x, axis=1, keepdims=False)
+        elif pooling == "weighted":
+            from condenser import WeightedAttention
+            layer = WeightedAttention()
+            self.training_variables.extend(layer.trainable_variables)
+            return layer
+        elif pooling == "condenser":
+            from condenser import Condenser
+            layer = Condenser()
+            self.training_variables.extend(layer.trainable_variables)
+            return layer
 
     def init(self):
         # dimensionalities
@@ -142,14 +160,14 @@ class HGNN:
     def call(self, V, V2E, E2V, hyperedges_type):
         # hyperedges embedding
         E_listing = tf.nn.embedding_lookup(V, E2V)
-        E_pool = self.pooling(E_listing)
+        E_pool = self.hyperedge_pooling(E_listing)
         E_type2vec = tf.nn.embedding_lookup(self.E_type, hyperedges_type)
         E_concat = tf.concat([E_pool, E_type2vec], axis=-1)
         E = self.hyperedge_activation(tf.matmul(E_concat, self.E_W) + self.E_b)
 
         # nodes encoding
         V_listing = tf.nn.embedding_lookup(E, V2E)
-        V_pool = self.pooling(V_listing)
+        V_pool = self.node_pooling(V_listing)
         V_concat = tf.concat([V_pool, V], axis=-1)
         V_2 = self.node_activation(tf.matmul(V_concat, self.V_W) + self.V_b)
         

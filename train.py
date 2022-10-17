@@ -13,22 +13,24 @@ n_nodes = len(G.nodes)
 n_labels = np.max(list(y.values())) + 1
 
 # create hypergraph
-H = HyperGraph(G, methods=["louvain", "self", "neighbors"])
+H = HyperGraph(G, methods=["louvain", "neighbors"])
 
 # create model
 model = HGNN(n_labels=n_labels,
              n_hyperedges_type=H.n_hyperedges_type,
              embedding_dim=V.shape[1],
              hyperedge_type_dim=16,
-             hyperedge_dim=512,
-             node_dim=128,
-             pooling="mean",
+             hyperedge_dim=256,
+             node_dim=64,
+             hyperedge_pooling="mean",
+             node_pooling="mean",
              node_activation="tanh",
              hyperedge_activation="tanh")
 
 # model fit
 model.fit(H, y_train, V=V,
           validation_data=y_test,
+          learning_rate=1e-2,
           epochs=100)
 # model predict
 y_pred = model.predict(H, V=V)
