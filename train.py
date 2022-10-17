@@ -13,7 +13,7 @@ n_nodes = len(G.nodes)
 n_labels = np.max(list(y.values())) + 1
 
 # create hypergraph
-H = HyperGraph(G, methods=["louvain", "neighbors"])
+H = HyperGraph(G, methods=["louvain", "neighbors", "self"])
 
 # create model
 model = HGNN(n_labels=n_labels,
