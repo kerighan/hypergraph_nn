@@ -11,17 +11,16 @@ G = nx.read_gexf(f"datasets/{dataset}/G.gexf")
 V = np.load(f"datasets/{dataset}/features.npy")
 labels = np.load(f"datasets/{dataset}/labels.npy")
 n_labels = np.max(labels) + 1
-# create training/testing set
+# create training/testing dictionaries
 y = {n: labels[i] for i, n in enumerate(G.nodes)}
 y_train, y_test = split_train_test(y, .4, random_state=1)
-print(len(y_train), len(y_test), n_labels)
 
 # create hypergraph from graph
 H = HyperGraph(G, methods=["neighbors", "louvain"])
 # add hyperedges from the feature matrix
-# H.add_hyperedges_from(get_hyperedges_from_label_matrix(V))
+H.add_hyperedges_from(get_hyperedges_from_label_matrix(V))
 # add structural role embedding
-X = RoleWalk(embedding_dim=2).fit_transform(G)
+X = RoleWalk().fit_transform(G)
 V = np.hstack([X, V])
 
 # create model
