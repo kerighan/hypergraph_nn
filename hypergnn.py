@@ -9,31 +9,41 @@ ROLEWALK_METHOD = "kmeans"
 
 
 class HyperGraph:
-    def __init__(self, G, methods=["neighbors", "louvain"]):
+    def __init__(self, G=None, methods=["neighbors", "louvain"]):
         self.hyperedges_type = []
         self.hyperedges = []
         self.current_hyperedges_type = 0
-        self.node2id = {n: i for i, n in enumerate(G.nodes)}
-        self.node2hyperedges = [[] for i in range(len(G.nodes))]
-        self.n_nodes = len(G.nodes)
+        if G is not None:
+            self.node2id = {n: i for i, n in enumerate(G.nodes)}
+            self.nodes = list(G.nodes)
+            self.node2hyperedges = [[] for i in range(len(G.nodes))]
+            self.n_nodes = len(G.nodes)
 
-        if "louvain" in methods:
-            self.add_louvain_hyperedges(G)
-        if "infomap" in methods:
-            self.add_infomap_hyperedges(G)
-        if "neighbors" in methods:
-            self.add_neighbors_hyperedges(G)
-        if "self" in methods:
-            self.add_self_hyperedges(G)
-        if "rolewalk" in methods:
-            self.add_rolewalk_hyperedges(G)
-        if "neighbors_of_neighbors" in methods:
-            self.add_neighbors_of_neighbors_hyperedges(G)
-        if "random_walks" in methods:
-            self.add_random_walks_hyperedges(G)
-        self.n_hyperedges_type = self.current_hyperedges_type
+            if "louvain" in methods:
+                self.add_louvain_hyperedges(G)
+            if "infomap" in methods:
+                self.add_infomap_hyperedges(G)
+            if "neighbors" in methods:
+                self.add_neighbors_hyperedges(G)
+            if "self" in methods:
+                self.add_self_hyperedges(G)
+            if "rolewalk" in methods:
+                self.add_rolewalk_hyperedges(G)
+            if "neighbors_of_neighbors" in methods:
+                self.add_neighbors_of_neighbors_hyperedges(G)
+            if "random_walks" in methods:
+                self.add_random_walks_hyperedges(G)
+            self.n_hyperedges_type = self.current_hyperedges_type
 
-    def add_hyperedges_from(self, hyperedges, ids=True):
+    def add_nodes_from(self, nodes):
+        self.node2id = {}
+        for i, node in enumerate(nodes):
+            self.node2id[node] = i
+        self.node2hyperedges = [[] for i in range(len(nodes))]
+        self.n_nodes = len(nodes)
+        self.nodes = nodes
+
+    def add_hyperedges_from(self, hyperedges, ids=False):
         hyperedge_index = len(self.hyperedges)
         for i, hyperedge in enumerate(hyperedges):
             if ids:
@@ -49,6 +59,7 @@ class HyperGraph:
                 self.hyperedges.append(h)
             self.hyperedges_type.append(self.current_hyperedges_type)
         self.current_hyperedges_type += 1
+        self.n_hyperedges_type = self.current_hyperedges_type
 
     def add_infomap_hyperedges(self, G):
         import infomap as ip
@@ -78,6 +89,7 @@ class HyperGraph:
         self.hyperedges_type.extend(
             [self.current_hyperedges_type] * len(hyperedges))
         self.current_hyperedges_type += 1
+        self.n_hyperedges_type = self.current_hyperedges_type
 
     def add_random_walks_hyperedges(self, G):
         from walker import random_walks
@@ -91,6 +103,7 @@ class HyperGraph:
             self.hyperedges.append(hyperedge)
             self.hyperedges_type.append(self.current_hyperedges_type)
         self.current_hyperedges_type += 1
+        self.n_hyperedges_type = self.current_hyperedges_type
 
     def add_rolewalk_hyperedges(self, G):
         from rolewalk import RoleWalk
@@ -98,7 +111,6 @@ class HyperGraph:
         hyperedges = {}
         for node_id, cm in enumerate(y):
             hyperedges.setdefault(cm, []).append(node_id)
-        print(np.bincount(y))
 
         hyperedge_index = len(self.hyperedges)
         hyperedges = list(hyperedges.values())
@@ -110,6 +122,7 @@ class HyperGraph:
         self.hyperedges_type.extend(
             [self.current_hyperedges_type] * len(hyperedges))
         self.current_hyperedges_type += 1
+        self.n_hyperedges_type = self.current_hyperedges_type
 
     def add_louvain_hyperedges(self, G):
         from cylouvain import best_partition
@@ -129,6 +142,7 @@ class HyperGraph:
         self.hyperedges_type.extend(
             [self.current_hyperedges_type] * len(hyperedges))
         self.current_hyperedges_type += 1
+        self.n_hyperedges_type = self.current_hyperedges_type
 
     def add_neighbors_hyperedges(self, G):
         hyperedge_index = len(self.hyperedges)
@@ -149,6 +163,7 @@ class HyperGraph:
             self.hyperedges.append(hyperedge)
             self.hyperedges_type.append(self.current_hyperedges_type)
         self.current_hyperedges_type += 1
+        self.n_hyperedges_type = self.current_hyperedges_type
 
     def add_neighbors_of_neighbors_hyperedges(self, G):
         hyperedge_index = len(self.hyperedges)
@@ -168,6 +183,7 @@ class HyperGraph:
             self.hyperedges.append(list(hyperedge))
             self.hyperedges_type.append(self.current_hyperedges_type)
         self.current_hyperedges_type += 1
+        self.n_hyperedges_type = self.current_hyperedges_type
 
     def add_self_hyperedges(self, G):
         hyperedge_index = len(self.hyperedges)
@@ -177,6 +193,7 @@ class HyperGraph:
             self.hyperedges.append([node_id])
             self.hyperedges_type.append(self.current_hyperedges_type)
         self.current_hyperedges_type += 1
+        self.n_hyperedges_type = self.current_hyperedges_type
 
     @property
     def V2E(self):
@@ -188,29 +205,30 @@ class HyperGraph:
     def E2V(self):
         return tf.ragged.constant(self.hyperedges, dtype=np.int32)
 
+    def save(self, filename):
+        import pickle
+        pickle.dump(self, open(filename, "wb"))
+
+    @staticmethod
+    def load(filename):
+        import pickle
+        return pickle.load(open(filename, "rb"))
+
 
 class HyperGNN:
     def __init__(
         self,
-        n_labels,
-        n_hyperedges_type,
-        embedding_dim=10,
-        hyperedge_type_dim=5,
-        hyperedge_dim=10,
-        node_dim=10,
+        hyperedge_type_dim=4,
+        hyperedge_dim=32,
+        node_dim=32,
         hyperedge_activation="tanh",
         node_activation="tanh"
     ):
-        # cardinalities
-        self.n_labels = n_labels
-        self.n_hyperedges_type = n_hyperedges_type
-
         # dimensionality
-        self.embedding_dim = embedding_dim
         self.hyperedge_type_dim = hyperedge_type_dim
         self.hyperedge_dim = hyperedge_dim
         self.node_dim = node_dim
-        self.training_variables = []
+        self.trainable_variables = []
 
         # activations
         self.hyperedge_activation = (
@@ -240,7 +258,7 @@ class HyperGNN:
         self.W = glorot_normal(shape=(self.node_dim, self.n_labels))
 
         # list training variables
-        self.training_variables = [
+        self.trainable_variables = [
             self.E_type, self.E_W, self.E_b, self.E_att, self.E_temperature,
             self.V_W, self.V_b, self.V_att, self.V_temperature,
             self.W]
@@ -258,6 +276,7 @@ class HyperGNN:
         # hyperedges embedding
         E_seq = tf.nn.embedding_lookup(V, E2V)
         E_pool = self.attention(E_seq, self.E_att, self.E_temperature)
+        # E_pool = self.condenser(E_seq)
         E_type2vec = tf.nn.embedding_lookup(self.E_type, hyperedges_type)
         E_concat = tf.concat([E_pool, E_type2vec], axis=-1)
         E = self.hyperedge_activation(tf.matmul(E_concat, self.E_W) + self.E_b)
@@ -296,28 +315,37 @@ class HyperGNN:
         return opt
 
     def fit(
-        self, H, y, V=None,
+        self, H, V, y, embedding_dim=None,
+        preprocessor=None,
         epochs=200, learning_rate=1e-3, optimizer="nadam",
         beta_1=.9, beta_2=.999, clipnorm=2,
         metrics="accuracy", validation_data=None
     ):
-        # create training variables
-        self.build()
-
         # prepare training set
-        n_labels = np.max(list(y.values())) + 1
-        y_true = np.zeros((H.n_nodes, n_labels))
+        n_labels = int(np.max(list(y.values())) + 1)
+        y_true = np.zeros((H.n_nodes, n_labels), dtype=np.bool_)
         for node, label in y.items():
             node_id = H.node2id[node]
             y_true[node_id, label] = 1
+        # cardinalities
+        self.n_labels = n_labels
+        self.n_hyperedges_type = H.n_hyperedges_type
 
-        # embedding weights
-        if V is None:
-            V = glorot_normal(shape=(H.n_nodes, self.embedding_dim))
-            self.V = V
-            self.training_variables.append(V)
-        elif V.dtype != np.float32:
+        # ensure embedding weights are float32
+        if V.dtype != np.float32:
             V = V.astype(np.float32)
+
+        # add preprocessor model weights
+        if preprocessor is not None:
+            V = preprocessor(tf.constant(V, dtype=np.float32))
+            self.trainable_variables.extend(preprocessor.trainable_variables)
+            self.preprocessor = preprocessor
+
+        # extract embedding size from input
+        self.embedding_dim = V.shape[1]
+
+        # create training variables
+        self.build()
 
         # hypergraph variables
         E2V = H.E2V  # hyperedge to vertices list
@@ -334,7 +362,7 @@ class HyperGNN:
         pbar = tqdm(range(epochs))
         for _ in pbar:
             with tf.GradientTape() as tape:
-                tape.watch(self.training_variables)
+                tape.watch(self.trainable_variables)
                 output = self.call(V, V2E, E2V, hyperedges_type)
                 loss = tf.math.reduce_mean(
                     tf.keras.losses.categorical_crossentropy(y_true, output))
@@ -363,24 +391,29 @@ class HyperGNN:
                     pbar.set_description(f"loss={loss.numpy():.3f}")
 
                 # gradient descent
-                gradients = tape.gradient(loss, self.training_variables)
-                opt.apply_gradients(zip(gradients, self.training_variables))
+                gradients = tape.gradient(loss, self.trainable_variables)
+                opt.apply_gradients(zip(gradients, self.trainable_variables))
 
         # show best validation accuracy
         if validation_data is not None:
             print(f"[i] best_val_acc={best_val_acc:.3f}")
 
-    def predict(self, H, V=None):
-        if V is None:
-            V = self.V
-        elif V.dtype != np.float32:
+    def predict(self, H, V, as_dict=True):
+        if V.dtype != np.float32:
             V = V.astype(np.float32)
+
+        if hasattr(self, "preprocessor"):
+            V = self.preprocessor.predict(V, verbose=False)
 
         E2V = H.E2V  # hyperedge to vertices list
         V2E = H.V2E  # vertice to hyperedges list
         hyperedges_type = np.array(H.hyperedges_type, dtype=np.int32)
         output = self.call(V, V2E, E2V, hyperedges_type)
         y_pred = np.argmax(output.numpy(), axis=-1)
+
+        if as_dict:
+            res = {H.nodes[i]: label for i, label in enumerate(y_pred)}
+            return res
         return y_pred
 
     def save(self, filename):
@@ -391,42 +424,6 @@ class HyperGNN:
     def load(filename):
         import pickle
         return pickle.load(open(filename, "rb"))
-
-
-class Adam(object):
-    def __init__(
-        self, lr=.01, beta_1=.9, beta_2=.999, epsilon=1e-7, clipnorm=None
-    ):
-        self._lr = tf.Variable(lr, dtype=tf.float32)
-        self._beta_1 = tf.Variable(beta_1, dtype=tf.float32)
-        self._beta_2 = tf.Variable(beta_2, dtype=tf.float32)
-        self._epsilon = tf.constant(epsilon, dtype=tf.float32)
-        self.clipnorm = clipnorm
-        self._t = tf.Variable(0, dtype=tf.float32)
-
-    def init_moments(self, var_list):
-        self._m = {var._unique_id: tf.Variable(tf.zeros_like(var))
-                   for var in var_list}
-        self._v = {var._unique_id: tf.Variable(tf.zeros_like(var))
-                   for var in var_list}
-
-    def apply_gradients(self, grads_and_vars):
-        self._t.assign_add(tf.constant(1., self._t.dtype))
-        for grad, var in grads_and_vars:
-            if self.clipnorm:
-                grad = tf.clip_by_norm(grad, self.clipnorm)
-
-            m = self._m[var._unique_id]
-            v = self._v[var._unique_id]
-
-            m.assign(self._beta_1 * m + (1. - self._beta_1) * grad)
-            v.assign(self._beta_2 * v + (1. - self._beta_2) * tf.square(grad))
-
-            lr = self._lr * \
-                tf.sqrt(1 - tf.pow(self._beta_2, self._t)) / \
-                (1 - tf.pow(self._beta_1, self._t))
-            update = -lr * m / (tf.sqrt(v) + self._epsilon)
-            var.assign_add(update)
 
 
 def split_train_test(y, validation_split=.1, random_state=None):
