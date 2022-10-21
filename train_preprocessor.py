@@ -14,10 +14,10 @@ labels = np.load(f"datasets/{dataset}/labels.npy")
 n_labels = np.max(labels) + 1
 # create training/testing dictionaries
 y = {n: labels[i] for i, n in enumerate(G.nodes)}
-y_train, y_test = split_train_test(y, .4, random_state=1)
+y_train, y_test = split_train_test(y, .4)
 
 # create hypergraph from graph
-H = HyperGraph(G, methods=["neighbors", "louvain", "infomap"])
+H = HyperGraph(G, methods=["neighbors", "louvain", "rolewalk", "random_walks"])
 
 #
 preprocessor = tf.keras.Sequential()
@@ -28,13 +28,14 @@ model = HyperGNN(hyperedge_type_dim=16,
                  hyperedge_dim=768,
                  node_dim=768,
                  node_activation="tanh",
-                 hyperedge_activation="tanh")
+                 hyperedge_activation="tanh",
+                 n_layers=2)
 # model fit
 model.fit(H, V, y_train,
           preprocessor=preprocessor,
           validation_data=y_test,
           learning_rate=1e-3,
-          epochs=40)
+          epochs=50)
 
 # persist model to disk
 model.save("model.p")
@@ -42,4 +43,4 @@ model.save("model.p")
 model = HyperGNN.load("model.p")
 
 # predict on a set of potentially different hypergraph and features
-y_pred = model.predict(H, V=V)
+y_pred = model.predict(H, V)

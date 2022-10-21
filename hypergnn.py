@@ -1,14 +1,18 @@
+import networkx as nx
 import numpy as np
 import tensorflow as tf
 from numpy.random import normal
 from tqdm import tqdm
 
-WALK_LEN = 5
-LOUVAIN_RESOLUTION = 1
-ROLEWALK_METHOD = "kmeans"
+algo = nx.algorithms
 
 
 class HyperGraph:
+    WALK_LEN = 10
+    LOUVAIN_RESOLUTION = 1
+    ROLEWALK_METHOD = "agglomerative"
+    K_CLIQUE_COMMUNITY = 4
+
     def __init__(self, G=None, methods=["neighbors", "louvain"]):
         self.hyperedges_type = []
         self.hyperedges = []
@@ -33,6 +37,22 @@ class HyperGraph:
                 self.add_neighbors_of_neighbors_hyperedges(G)
             if "random_walks" in methods:
                 self.add_random_walks_hyperedges(G)
+            if "onion_layers" in methods:
+                self.add_onion_layers_hyperedges(G)
+            if "k_clique_communities" in methods:
+                self.add_k_clique_communities_hyperedges(G)
+            if "isolates" in methods:
+                self.add_isolates_hyperedges(G)
+            if "articulation_points" in methods:
+                self.add_articulation_points_hyperedges(G)
+            if "min_dominating_set" in methods:
+                self.add_min_dominating_set_hyperedges(G)
+            if "voterank" in methods:
+                self.add_voterank_hyperedges(G)
+            if "max_clique" in methods:
+                self.add_max_clique_hyperedges(G)
+            if "vertex_cover" in methods:
+                self.add_vertex_cover_hyperedges(G)
             self.n_hyperedges_type = self.current_hyperedges_type
 
     def add_nodes_from(self, nodes):
@@ -44,22 +64,78 @@ class HyperGraph:
         self.nodes = nodes
 
     def add_hyperedges_from(self, hyperedges, ids=False):
-        hyperedge_index = len(self.hyperedges)
-        for i, hyperedge in enumerate(hyperedges):
-            if ids:
-                for node_id in hyperedge:
-                    self.node2hyperedges[node_id].append(hyperedge_index + i)
-                self.hyperedges.append(hyperedge)
-            else:
-                h = []
-                for node in hyperedge:
-                    node_id = self.node2id[node]
-                    self.node2hyperedges[node_id].append(hyperedge_index + i)
-                    h.append(node_id)
-                self.hyperedges.append(h)
-            self.hyperedges_type.append(self.current_hyperedges_type)
+        if isinstance(hyperedges, list):
+            hyperedge_index = len(self.hyperedges)
+            for i, hyperedge in enumerate(hyperedges):
+                if ids:
+                    for node_id in hyperedge:
+                        self.node2hyperedges[node_id].append(
+                            hyperedge_index + i)
+                    self.hyperedges.append(hyperedge)
+                else:
+                    h = []
+                    for node in hyperedge:
+                        node_id = self.node2id[node]
+                        self.node2hyperedges[node_id].append(
+                            hyperedge_index + i)
+                        h.append(node_id)
+                    self.hyperedges.append(h)
+                self.hyperedges_type.append(self.current_hyperedges_type)
+        elif isinstance(hyperedges, dict):
+            partition2vertices = {}
+            for node, cm in hyperedges.items():
+                node_id = node if ids else self.node2id[node]
+                partition2vertices.setdefault(cm, []).append(node_id)
+            hyperedge_index = len(self.hyperedges)
+            hyperedges = list(partition2vertices.values())
+            for i, nodes in enumerate(hyperedges):
+                for node_id in nodes:
+                    self.node2hyperedges[node_id].append(i + hyperedge_index)
+            self.hyperedges.extend(hyperedges)
+            self.hyperedges_type.extend(
+                [self.current_hyperedges_type] * len(hyperedges))
+
         self.current_hyperedges_type += 1
         self.n_hyperedges_type = self.current_hyperedges_type
+
+    def add_vertex_cover_hyperedges(self, G):
+        nodes = list(nx.algorithms.approximation.min_weighted_vertex_cover(G))
+        self.add_hyperedges_from([nodes])
+
+    def add_voterank_hyperedges(self, G):
+        nodes = nx.voterank(G)
+        self.add_hyperedges_from([nodes])
+
+    def add_min_dominating_set_hyperedges(self, G):
+        nodes = nx.algorithms.approximation.min_weighted_dominating_set(G)
+        self.add_hyperedges_from([nodes])
+
+    def add_articulation_points_hyperedges(self, G):
+        nodes = list(
+            nx.algorithms.components.articulation_points(G))
+        self.add_hyperedges_from([nodes])
+
+    def add_isolates_hyperedges(self, G):
+        nodes = list(nx.isolates(G))
+        self.add_hyperedges_from([nodes])
+
+    def add_k_clique_communities_hyperedges(self, G):
+        cm = list(algo.community.k_clique_communities(
+            G, self.K_CLIQUE_COMMUNITY))
+        self.add_hyperedges_from(cm)
+
+    def add_onion_layers_hyperedges(self, G):
+        try:
+            partition = nx.algorithms.core.onion_layers(G)
+        except nx.exception.NetworkXError:
+            T = G.copy()
+            T.remove_edges_from(nx.selfloop_edges(T))
+            partition = nx.algorithms.core.onion_layers(T)
+        self.add_hyperedges_from(partition)
+
+    def add_max_clique_hyperedges(self, G):
+        print(nx.algorithms.approximation.clique.max_clique(G))
+        raise ValueError
 
     def add_infomap_hyperedges(self, G):
         import infomap as ip
@@ -93,7 +169,7 @@ class HyperGraph:
 
     def add_random_walks_hyperedges(self, G):
         from walker import random_walks
-        X = random_walks(G, n_walks=1, walk_len=WALK_LEN)
+        X = random_walks(G, n_walks=1, walk_len=self.WALK_LEN, p=.25, q=.25)
         hyperedge_index = len(self.hyperedges)
         for i, row in enumerate(X):
             hyperedge = []
@@ -107,7 +183,7 @@ class HyperGraph:
 
     def add_rolewalk_hyperedges(self, G):
         from rolewalk import RoleWalk
-        y = RoleWalk(walk_len=3).fit_predict(G, method=ROLEWALK_METHOD)
+        y = RoleWalk(walk_len=3).fit_predict(G, method=self.ROLEWALK_METHOD)
         hyperedges = {}
         for node_id, cm in enumerate(y):
             hyperedges.setdefault(cm, []).append(node_id)
@@ -126,23 +202,8 @@ class HyperGraph:
 
     def add_louvain_hyperedges(self, G):
         from cylouvain import best_partition
-        partition = best_partition(G, resolution=LOUVAIN_RESOLUTION)
-        hyperedges = {}
-        for node, cm in partition.items():
-            node_id = self.node2id[node]
-            hyperedges.setdefault(cm, []).append(node_id)
-
-        hyperedge_index = len(self.hyperedges)
-        hyperedges = list(hyperedges.values())
-        for i, nodes in enumerate(hyperedges):
-            for node_id in nodes:
-                self.node2hyperedges[node_id].append(i + hyperedge_index)
-
-        self.hyperedges.extend(hyperedges)
-        self.hyperedges_type.extend(
-            [self.current_hyperedges_type] * len(hyperedges))
-        self.current_hyperedges_type += 1
-        self.n_hyperedges_type = self.current_hyperedges_type
+        partition = best_partition(G, resolution=self.LOUVAIN_RESOLUTION)
+        self.add_hyperedges_from(partition)
 
     def add_neighbors_hyperedges(self, G):
         hyperedge_index = len(self.hyperedges)
@@ -174,8 +235,11 @@ class HyperGraph:
             hyperedge.add(node_id)
             self.node2hyperedges[node_id].append(i + hyperedge_index)
 
-            for neighbor in G.neighbors(node):
+            neighbors = set(G.neighbors(node))
+            for neighbor in neighbors:
                 for neighbor_2 in G.neighbors(neighbor):
+                    if neighbor_2 in neighbors:
+                        continue
                     nb_id = self.node2id[neighbor_2]
                     hyperedge.add(nb_id)
                     self.node2hyperedges[nb_id].append(i + hyperedge_index)
@@ -222,13 +286,15 @@ class HyperGNN:
         hyperedge_dim=32,
         node_dim=32,
         hyperedge_activation="tanh",
-        node_activation="tanh"
+        node_activation="tanh",
+        n_layers=1
     ):
         # dimensionality
         self.hyperedge_type_dim = hyperedge_type_dim
         self.hyperedge_dim = hyperedge_dim
         self.node_dim = node_dim
         self.trainable_variables = []
+        self.n_layers = n_layers
 
         # activations
         self.hyperedge_activation = (
@@ -263,12 +329,34 @@ class HyperGNN:
             self.V_W, self.V_b, self.V_att, self.V_temperature,
             self.W]
 
-    def attention(self, E_seq, E_att, temperature):
-        logits = tf.ragged.map_flat_values(tf.matmul, E_seq, E_att)
+        if self.n_layers == 2:
+            # dimensionalities
+            E_2_W_in = self.hyperedge_type_dim + self.node_dim
+            V_2_W_in = self.node_dim + self.hyperedge_dim
+
+            # 2nd layer hyperedges embedding
+            self.E_2_att = glorot_normal(shape=(self.node_dim, 1))
+            self.E_2_temperature = tf.Variable(np.ones(1, dtype=np.float32))
+            self.E_2_W = glorot_normal(shape=(E_2_W_in, self.hyperedge_dim))
+            self.E_2_b = glorot_normal(shape=(1, self.hyperedge_dim))
+
+            # 2nd layer nodes embedding
+            self.V_2_W = glorot_normal(shape=(V_2_W_in, self.node_dim))
+            self.V_2_b = glorot_normal(shape=(1, self.node_dim))
+            self.V_2_att = glorot_normal(shape=(self.hyperedge_dim, 1))
+            self.V_2_temperature = tf.Variable(np.ones(1, dtype=np.float32))
+
+            self.trainable_variables.extend([
+                self.E_2_att, self.E_2_temperature, self.E_2_W, self.E_2_b,
+                self.V_2_W, self.V_2_b, self.V_2_att, self.V_2_temperature
+            ])
+
+    def attention(self, seq, att, temperature):
+        logits = tf.ragged.map_flat_values(tf.matmul, seq, att)
         logits -= tf.reduce_max(logits, axis=1, keepdims=True)
         ai = tf.math.exp(temperature * logits)
         att_weights = ai / tf.math.reduce_sum(ai, axis=1, keepdims=True)
-        weighted_input = E_seq * att_weights
+        weighted_input = seq * att_weights
         result = tf.math.reduce_sum(weighted_input, axis=1)
         return result
 
@@ -276,23 +364,43 @@ class HyperGNN:
         # hyperedges embedding
         E_seq = tf.nn.embedding_lookup(V, E2V)
         E_pool = self.attention(E_seq, self.E_att, self.E_temperature)
-        # E_pool = self.condenser(E_seq)
         E_type2vec = tf.nn.embedding_lookup(self.E_type, hyperedges_type)
         E_concat = tf.concat([E_pool, E_type2vec], axis=-1)
         E = self.hyperedge_activation(tf.matmul(E_concat, self.E_W) + self.E_b)
 
-        # nodes encoding
+        # nodes embedding
         V_seq = tf.nn.embedding_lookup(E, V2E)
         V_pool = self.attention(V_seq, self.V_att, self.V_temperature)
         V_concat = tf.concat([V_pool, V], axis=-1)
         V_2 = self.node_activation(tf.matmul(V_concat, self.V_W) + self.V_b)
 
-        # get label
-        out = tf.nn.softmax(tf.matmul(V_2, self.W))
+        if self.n_layers == 2:
+            # 2nd layer hyperedges embedding
+            E_2_seq = tf.nn.embedding_lookup(V_2, E2V)
+            E_2_pool = self.attention(E_2_seq, self.E_2_att,
+                                      self.E_2_temperature)
+            E_2_concat = tf.concat([E_2_pool, E_type2vec], axis=-1)
+            E_2 = self.hyperedge_activation(
+                tf.matmul(E_2_concat, self.E_2_W) + self.E_2_b)
+
+            # 2nd layer nodes embedding
+            V_2_seq = tf.nn.embedding_lookup(E_2, V2E)
+            V_2_pool = self.attention(
+                V_2_seq, self.V_2_att, self.V_2_temperature)
+            V_2_concat = tf.concat([V_2_pool, V_2], axis=-1)
+            V_3 = self.node_activation(
+                tf.matmul(V_2_concat, self.V_2_W) + self.V_2_b)
+
+            # get label
+            out = tf.nn.softmax(tf.matmul(V_3, self.W))
+        else:
+            # get label
+            out = tf.nn.softmax(tf.matmul(V_2, self.W))
         return out
 
     def get_optimizer(
-        self, optimizer, learning_rate, beta_1, beta_2, clipnorm
+        self, optimizer, learning_rate, beta_1, beta_2, clipnorm,
+        momentum=.5, nesterov=False
     ):
         if optimizer == "nadam":
             opt = tf.keras.optimizers.Nadam(learning_rate=learning_rate,
@@ -312,6 +420,11 @@ class HyperGNN:
                                              beta_1=beta_1,
                                              beta_2=beta_2,
                                              clipnorm=clipnorm)
+        elif optimizer == "adagrad":
+            opt = tf.keras.optimizers.Adagrad(learning_rate=learning_rate)
+        elif optimizer == "sgd":
+            opt = tf.keras.optimizers.SGD(
+                learning_rate=learning_rate, momentum=momentum, nesterov=nesterov)
         return opt
 
     def fit(
