@@ -9,6 +9,7 @@ algo = nx.algorithms
 
 class HyperGraph:
     WALK_LEN = 10
+    N_WALKS = 1
     LOUVAIN_RESOLUTION = 1
     ROLEWALK_METHOD = "agglomerative"
     K_CLIQUE_COMMUNITY = 4
@@ -169,7 +170,8 @@ class HyperGraph:
 
     def add_random_walks_hyperedges(self, G):
         from walker import random_walks
-        X = random_walks(G, n_walks=1, walk_len=self.WALK_LEN, p=.25, q=.25)
+        X = random_walks(G, n_walks=self.N_WALKS,
+                         walk_len=self.WALK_LEN, p=.25, q=.25)
         hyperedge_index = len(self.hyperedges)
         for i, row in enumerate(X):
             hyperedge = []
@@ -287,6 +289,7 @@ class HyperGNN:
         node_dim=32,
         hyperedge_activation="tanh",
         node_activation="tanh",
+        attention_activation="weighted",
         n_layers=1
     ):
         # dimensionality
@@ -300,6 +303,8 @@ class HyperGNN:
         self.hyperedge_activation = (
             tf.keras.activations.get(hyperedge_activation))
         self.node_activation = tf.keras.activations.get(node_activation)
+        self.attention_activation = (
+            tf.keras.activations.get(attention_activation))
 
     def build(self):
         # dimensionalities
@@ -312,12 +317,15 @@ class HyperGNN:
         self.E_W = glorot_normal(shape=(E_W_in, self.hyperedge_dim))
         self.E_b = glorot_normal(shape=(1, self.hyperedge_dim))
         self.E_att = glorot_normal(shape=(self.embedding_dim, 1))
+        self.E_att_bias = tf.Variable(np.zeros(1, dtype=np.float32))
         self.E_temperature = tf.Variable(np.ones(1, dtype=np.float32))
+        self.trainable_variables.extend([self.E_att, self.E_temperature])
 
         # nodes embedding
         self.V_W = glorot_normal(shape=(V_W_in, self.node_dim))
         self.V_b = glorot_normal(shape=(1, self.node_dim))
         self.V_att = glorot_normal(shape=(self.hyperedge_dim, 1))
+        self.V_att_bias = tf.Variable(np.zeros(1, dtype=np.float32))
         self.V_temperature = tf.Variable(np.ones(1, dtype=np.float32))
 
         # classification weights
@@ -325,17 +333,20 @@ class HyperGNN:
 
         # list training variables
         self.trainable_variables = [
-            self.E_type, self.E_W, self.E_b, self.E_att, self.E_temperature,
-            self.V_W, self.V_b, self.V_att, self.V_temperature,
+            self.E_type, self.E_W, self.E_b,
+            self.E_att, self.E_att_bias, self.E_temperature,
+            self.V_W, self.V_b,
+            self.V_att, self.V_att_bias, self.V_temperature,
             self.W]
 
-        if self.n_layers == 2:
+        if self.n_layers >= 2:
             # dimensionalities
             E_2_W_in = self.hyperedge_type_dim + self.node_dim
             V_2_W_in = self.node_dim + self.hyperedge_dim
 
             # 2nd layer hyperedges embedding
             self.E_2_att = glorot_normal(shape=(self.node_dim, 1))
+            self.E_2_att_bias = tf.Variable(np.zeros(1, dtype=np.float32))
             self.E_2_temperature = tf.Variable(np.ones(1, dtype=np.float32))
             self.E_2_W = glorot_normal(shape=(E_2_W_in, self.hyperedge_dim))
             self.E_2_b = glorot_normal(shape=(1, self.hyperedge_dim))
@@ -344,17 +355,48 @@ class HyperGNN:
             self.V_2_W = glorot_normal(shape=(V_2_W_in, self.node_dim))
             self.V_2_b = glorot_normal(shape=(1, self.node_dim))
             self.V_2_att = glorot_normal(shape=(self.hyperedge_dim, 1))
+            self.V_2_att_bias = tf.Variable(np.zeros(1, dtype=np.float32))
             self.V_2_temperature = tf.Variable(np.ones(1, dtype=np.float32))
 
             self.trainable_variables.extend([
-                self.E_2_att, self.E_2_temperature, self.E_2_W, self.E_2_b,
-                self.V_2_W, self.V_2_b, self.V_2_att, self.V_2_temperature
+                self.E_2_W, self.E_2_b,
+                self.E_2_att, self.E_2_att_bias, self.E_2_temperature,
+                self.V_2_W, self.V_2_b,
+                self.V_2_att, self.V_2_att_bias, self.V_2_temperature
+            ])
+        if self.n_layers == 3:
+            # dimensionalities
+            E_3_W_in = self.hyperedge_type_dim + self.node_dim
+            V_3_W_in = self.node_dim + self.hyperedge_dim
+
+            # 2nd layer hyperedges embedding
+            self.E_3_att = glorot_normal(shape=(self.node_dim, 1))
+            self.E_3_att_bias = tf.Variable(np.zeros(1, dtype=np.float32))
+            self.E_3_temperature = tf.Variable(np.ones(1, dtype=np.float32))
+            self.E_3_W = glorot_normal(shape=(E_3_W_in, self.hyperedge_dim))
+            self.E_3_b = glorot_normal(shape=(1, self.hyperedge_dim))
+
+            # 2nd layer nodes embedding
+            self.V_3_W = glorot_normal(shape=(V_3_W_in, self.node_dim))
+            self.V_3_b = glorot_normal(shape=(1, self.node_dim))
+            self.V_3_att = glorot_normal(shape=(self.hyperedge_dim, 1))
+            self.V_3_att_bias = tf.Variable(np.zeros(1, dtype=np.float32))
+            self.V_3_temperature = tf.Variable(np.ones(1, dtype=np.float32))
+
+            self.trainable_variables.extend([
+                self.E_3_W, self.E_3_b,
+                self.E_3_att, self.E_3_att_bias, self.E_3_temperature,
+                self.V_3_W, self.V_3_b,
+                self.V_3_att, self.V_3_att_bias, self.V_3_temperature
             ])
 
-    def attention(self, seq, att, temperature):
+    def attention(self, seq, att, temperature, bias):
         logits = tf.ragged.map_flat_values(tf.matmul, seq, att)
+        logits = temperature * self.attention_activation(logits + bias[0])
+
+        # numerical stability
         logits -= tf.reduce_max(logits, axis=1, keepdims=True)
-        ai = tf.math.exp(temperature * logits)
+        ai = tf.math.exp(logits)
         att_weights = ai / tf.math.reduce_sum(ai, axis=1, keepdims=True)
         weighted_input = seq * att_weights
         result = tf.math.reduce_sum(weighted_input, axis=1)
@@ -363,36 +405,60 @@ class HyperGNN:
     def call(self, V, V2E, E2V, hyperedges_type):
         # hyperedges embedding
         E_seq = tf.nn.embedding_lookup(V, E2V)
-        E_pool = self.attention(E_seq, self.E_att, self.E_temperature)
+        E_pool = self.attention(E_seq, self.E_att,
+                                self.E_temperature, self.E_att_bias)
         E_type2vec = tf.nn.embedding_lookup(self.E_type, hyperedges_type)
         E_concat = tf.concat([E_pool, E_type2vec], axis=-1)
         E = self.hyperedge_activation(tf.matmul(E_concat, self.E_W) + self.E_b)
 
         # nodes embedding
         V_seq = tf.nn.embedding_lookup(E, V2E)
-        V_pool = self.attention(V_seq, self.V_att, self.V_temperature)
+        V_pool = self.attention(V_seq, self.V_att,
+                                self.V_temperature, self.V_att_bias)
         V_concat = tf.concat([V_pool, V], axis=-1)
         V_2 = self.node_activation(tf.matmul(V_concat, self.V_W) + self.V_b)
 
-        if self.n_layers == 2:
+        if self.n_layers >= 2:
             # 2nd layer hyperedges embedding
             E_2_seq = tf.nn.embedding_lookup(V_2, E2V)
             E_2_pool = self.attention(E_2_seq, self.E_2_att,
-                                      self.E_2_temperature)
+                                      self.E_2_temperature, self.E_2_att_bias)
             E_2_concat = tf.concat([E_2_pool, E_type2vec], axis=-1)
             E_2 = self.hyperedge_activation(
                 tf.matmul(E_2_concat, self.E_2_W) + self.E_2_b)
 
             # 2nd layer nodes embedding
             V_2_seq = tf.nn.embedding_lookup(E_2, V2E)
-            V_2_pool = self.attention(
-                V_2_seq, self.V_2_att, self.V_2_temperature)
+            V_2_pool = self.attention(V_2_seq, self.V_2_att,
+                                      self.V_2_temperature, self.V_2_att_bias)
             V_2_concat = tf.concat([V_2_pool, V_2], axis=-1)
             V_3 = self.node_activation(
                 tf.matmul(V_2_concat, self.V_2_W) + self.V_2_b)
 
-            # get label
-            out = tf.nn.softmax(tf.matmul(V_3, self.W))
+            if self.n_layers >= 3:
+                # 3rd layer hyperedges embedding
+                E_3_seq = tf.nn.embedding_lookup(V_3, E2V)
+                E_3_pool = self.attention(E_3_seq, self.E_3_att,
+                                          self.E_3_temperature,
+                                          self.E_3_att_bias)
+                E_3_concat = tf.concat([E_3_pool, E_type2vec], axis=-1)
+                E_3 = self.hyperedge_activation(
+                    tf.matmul(E_3_concat, self.E_3_W) + self.E_3_b)
+
+                # 3rd layer nodes embedding
+                V_3_seq = tf.nn.embedding_lookup(E_3, V2E)
+                V_3_pool = self.attention(V_3_seq, self.V_3_att,
+                                          self.V_3_temperature,
+                                          self.V_3_att_bias)
+                V_3_concat = tf.concat([V_3_pool, V_3], axis=-1)
+                V_4 = self.node_activation(
+                    tf.matmul(V_3_concat, self.V_3_W) + self.V_3_b)
+
+                # get label
+                out = tf.nn.softmax(tf.matmul(V_4, self.W))
+            else:
+                # get label
+                out = tf.nn.softmax(tf.matmul(V_3, self.W))
         else:
             # get label
             out = tf.nn.softmax(tf.matmul(V_2, self.W))
@@ -445,7 +511,10 @@ class HyperGNN:
         self.n_hyperedges_type = H.n_hyperedges_type
 
         # ensure embedding weights are float32
-        if V.dtype != np.float32:
+        if isinstance(V, tf.Variable):
+            assert V.dtype == np.float32
+            self.trainable_variables.append(V)
+        elif V.dtype != np.float32:
             V = V.astype(np.float32)
 
         # add preprocessor model weights

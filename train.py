@@ -13,37 +13,27 @@ labels = np.load(f"datasets/{dataset}/labels.npy")
 n_labels = np.max(labels) + 1
 # create training/testing dictionaries
 y = {n: labels[i] for i, n in enumerate(G.nodes)}
-y_train, y_test = split_train_test(y, .4, random_state=0)
+y_train, y_test = split_train_test(y, .4, random_state=1)
 
 # create hypergraph from graph
-# H = HyperGraph(G, methods=["neighbors",
-#                            "rolewalk",
-#                            "random_walks",
-#                            "infomap"])
-# HyperGraph.LOUVAIN_RESOLUTION = 2
-H = HyperGraph(G, methods=["neighbors",
-                           "louvain",
-                           "infomap",
-                           "rolewalk"])
+H = HyperGraph(G, methods=["neighbors", "louvain"])
 
-
-# create model
+# create and fit model
 model = HyperGNN(hyperedge_type_dim=32,
                  hyperedge_dim=512,
                  node_dim=512,
-                 node_activation="tanh",
-                 hyperedge_activation="tanh",
+                 node_activation="leaky_relu",
+                 hyperedge_activation="leaky_relu",
+                 attention_activation="leaky_relu",
                  n_layers=2)
-# model fit
 model.fit(H, V, y_train,
           validation_data=y_test,
-          learning_rate=1e-3, optimizer="nadam",
-          epochs=50)
+          learning_rate=1e-3,
+          optimizer="nadam",
+          epochs=40)
 
-# persist model to disk
-model.save("model.p")
-# model load
-model = HyperGNN.load("model.p")
+model.save("model.p")  # persist model to disk
+model = HyperGNN.load("model.p")  # model load
 
 # predict on a set of potentially different hypergraph and features
 y_pred = model.predict(H, V)
