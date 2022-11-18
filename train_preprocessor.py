@@ -17,19 +17,19 @@ y = {n: labels[i] for i, n in enumerate(G.nodes)}
 y_train, y_test = split_train_test(y, .4)
 
 # create hypergraph from graph
-H = HyperGraph(G, methods=["neighbors", "louvain", "rolewalk", "random_walks"])
+H = HyperGraph(G, methods=["neighbors", "louvain"])
 
 #
 preprocessor = tf.keras.Sequential()
-preprocessor.add(tf.keras.layers.Dense(512, activation="tanh"))
+preprocessor.add(tf.keras.layers.Dense(32, activation="relu"))
 
 # create model
-model = HyperGNN(hyperedge_type_dim=16,
-                 hyperedge_dim=768,
-                 node_dim=768,
-                 node_activation="tanh",
-                 hyperedge_activation="tanh",
-                 n_layers=2)
+model = HyperGNN(hyperedge_type_dim=32,
+                 hyperedge_dim=32,
+                 node_dim=32,
+                 node_activation="relu",
+                 hyperedge_activation="relu",
+                 n_layers=3)
 # model fit
 model.fit(H, V, y_train,
           preprocessor=preprocessor,
