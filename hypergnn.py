@@ -204,7 +204,10 @@ class HyperGraph:
         self.n_hyperedges_type = self.current_hyperedges_type
 
     def add_louvain_hyperedges(self, G):
-        from cylouvain import best_partition
+        try:
+            from cylouvain import best_partition
+        except ImportError:
+            from community import best_partition
         partition = best_partition(G, resolution=self.LOUVAIN_RESOLUTION)
         self.add_hyperedges_from(partition)
 
@@ -291,14 +294,15 @@ class HyperGNN:
         hyperedge_activation="relu",
         node_activation="relu",
         attention_activation="relu",
-        n_layers=1
+        n_layers=1,
+        selfless=False
     ):
         # dimensionality
         self.hyperedge_type_dim = hyperedge_type_dim
         self.hyperedge_dim = hyperedge_dim
         self.node_dim = node_dim
-        self.trainable_variables = []
         self.n_layers = n_layers
+        self.selfless = selfless
 
         # activations
         self.hyperedge_activation = (
@@ -306,164 +310,153 @@ class HyperGNN:
         self.node_activation = tf.keras.activations.get(node_activation)
         self.attention_activation = (
             tf.keras.activations.get(attention_activation))
+    
+    def add_weight(self, shape, initializer="glorot_normal"):
+        if initializer == "glorot_normal":
+            parameter = glorot_normal(shape=shape)
+        elif initializer == "ones":
+            parameter = tf.Variable(np.ones(shape, dtype=np.float32))
+        elif initializer == "zeros":
+            parameter = tf.Variable(np.zeros(shape, dtype=np.float32))
+
+        self.trainable_variables.append(parameter)
+        return parameter
+
+    def add_attention(self, attention_type="new"):
+        if attention_type == "new":
+            att = New2Attention()
+        elif attention_type == "weighted":
+            att = WeightedAttention()
+        elif attention_type == "adaptive":
+            att = AdaptiveAttention()
+        self.trainable_variables.extend(att.trainable_variables)
+        return att
 
     def build(self):
+        self.trainable_variables = []
+        attention_type = "weighted"
+
         # dimensionalities
-        E_W_in = self.hyperedge_type_dim + self.embedding_dim
-        V_W_in = self.embedding_dim + self.hyperedge_dim
+        if self.selfless:
+            E_W_in = self.hyperedge_type_dim + self.embedding_dim
+            V_W_in = self.hyperedge_dim
+        else:
+            E_W_in = self.hyperedge_type_dim + self.embedding_dim
+            V_W_in = self.embedding_dim + self.hyperedge_dim
 
         # hyperedges embedding
-        self.E_type = glorot_normal(shape=(self.n_hyperedges_type,
-                                           self.hyperedge_type_dim))
-        self.E_W = glorot_normal(shape=(E_W_in, self.hyperedge_dim))
-        self.E_b = glorot_normal(shape=(1, self.hyperedge_dim))
-        self.E_att = glorot_normal(shape=(self.embedding_dim, 1))
-        self.E_att_bias = tf.Variable(np.zeros(1, dtype=np.float32))
-        self.E_temperature = tf.Variable(np.ones(1, dtype=np.float32))
-        self.trainable_variables.extend([self.E_att, self.E_temperature])
-
+        self.E_type = self.add_weight(shape=(self.n_hyperedges_type,
+                                             self.hyperedge_type_dim))
+        self.E_W = self.add_weight(shape=(E_W_in, self.hyperedge_dim))
+        self.E_b = self.add_weight(shape=(1, self.hyperedge_dim),
+                                   initializer="zeros")
         # nodes embedding
-        self.V_W = glorot_normal(shape=(V_W_in, self.node_dim))
-        self.V_b = glorot_normal(shape=(1, self.node_dim))
-        self.V_att = glorot_normal(shape=(self.hyperedge_dim, 1))
-        self.V_att_bias = tf.Variable(np.zeros(1, dtype=np.float32))
-        self.V_temperature = tf.Variable(np.ones(1, dtype=np.float32))
-
+        self.V_W = self.add_weight(shape=(V_W_in, self.node_dim))
+        # self.V_type = self.add_weight(shape=(self.embedding_dim, self.hyperedge_dim))
+        self.V_b = self.add_weight(shape=(1, self.node_dim),
+                                   initializer="zeros")
         # classification weights
-        self.W = glorot_normal(shape=(self.node_dim, self.n_labels))
-
-        # list training variables
-        # self.trainable_variables = [
-        #     self.E_type, self.E_W, self.E_b,
-        #     self.E_att, self.E_att_bias, self.E_temperature,
-        #     self.V_W, self.V_b,
-        #     self.V_att, self.V_att_bias, self.V_temperature,
-        #     self.W]
-        self.trainable_variables = [
-            self.E_type, self.E_W, self.E_b,
-            self.V_W, self.V_b,
-            self.W]
-        self.attention_E_1 = get_multihead_self_attention(self.embedding_dim)
-        raise ValueError
-        self.attention_V_1 = get_weighted_attention()
-        self.trainable_variables.extend(self.attention_E_1.trainable_variables)
-        self.trainable_variables.extend(self.attention_V_1.trainable_variables)
+        self.W = self.add_weight(shape=(self.node_dim, self.n_labels))
+        # attention layers
+        self.attention_E_1 = self.add_attention("adaptive")
+        self.attention_V_1 = self.add_attention("weighted")
 
         if self.n_layers >= 2:
             # dimensionalities
-            E_2_W_in = self.hyperedge_type_dim + self.node_dim
-            V_2_W_in = self.node_dim + self.hyperedge_dim
+            if self.selfless:
+                E_2_W_in = self.hyperedge_type_dim + self.node_dim
+                V_2_W_in = self.hyperedge_dim
+            else:
+                E_2_W_in = self.hyperedge_type_dim + self.node_dim
+                V_2_W_in = self.hyperedge_dim + self.node_dim
+
+            self.E_2_type = self.add_weight(
+                shape=(self.n_hyperedges_type, self.hyperedge_type_dim))
 
             # 2nd layer hyperedges embedding
-            self.E_2_att = glorot_normal(shape=(self.node_dim, 1))
-            self.E_2_att_bias = tf.Variable(np.zeros(1, dtype=np.float32))
-            self.E_2_temperature = tf.Variable(np.ones(1, dtype=np.float32))
-            self.E_2_W = glorot_normal(shape=(E_2_W_in, self.hyperedge_dim))
-            self.E_2_b = glorot_normal(shape=(1, self.hyperedge_dim))
+            self.E_2_W = self.add_weight(shape=(E_2_W_in, self.hyperedge_dim))
+            self.E_2_b = self.add_weight(shape=(1, self.hyperedge_dim),
+                                         initializer="zeros")
 
             # 2nd layer nodes embedding
-            self.V_2_W = glorot_normal(shape=(V_2_W_in, self.node_dim))
-            self.V_2_b = glorot_normal(shape=(1, self.node_dim))
-            self.V_2_att = glorot_normal(shape=(self.hyperedge_dim, 1))
-            self.V_2_att_bias = tf.Variable(np.zeros(1, dtype=np.float32))
-            self.V_2_temperature = tf.Variable(np.ones(1, dtype=np.float32))
-
-            self.trainable_variables.extend([
-                self.E_2_W, self.E_2_b,
-                self.E_2_att, self.E_2_att_bias, self.E_2_temperature,
-                self.V_2_W, self.V_2_b,
-                self.V_2_att, self.V_2_att_bias, self.V_2_temperature
-            ])
+            self.V_2_W = self.add_weight(shape=(V_2_W_in, self.node_dim))
+            self.V_2_b = self.add_weight(shape=(1, self.node_dim))
+            self.attention_E_2 = self.add_attention("adaptive")
+            self.attention_V_2 = self.add_attention("weighted")
         if self.n_layers == 3:
             # dimensionalities
             E_3_W_in = self.hyperedge_type_dim + self.node_dim
             V_3_W_in = self.node_dim + self.hyperedge_dim
 
             # 2nd layer hyperedges embedding
-            self.E_3_att = glorot_normal(shape=(self.node_dim, 1))
-            self.E_3_att_bias = tf.Variable(np.zeros(1, dtype=np.float32))
-            self.E_3_temperature = tf.Variable(np.ones(1, dtype=np.float32))
-            self.E_3_W = glorot_normal(shape=(E_3_W_in, self.hyperedge_dim))
-            self.E_3_b = glorot_normal(shape=(1, self.hyperedge_dim))
+            self.attention_E_3 = self.add_attention(attention_type)
+            self.E_3_W = self.add_weight(shape=(E_3_W_in, self.hyperedge_dim))
+            self.E_3_b = self.add_weight(shape=(1, self.hyperedge_dim),
+                                         initializer="zeros")
 
             # 2nd layer nodes embedding
-            self.V_3_W = glorot_normal(shape=(V_3_W_in, self.node_dim))
-            self.V_3_b = glorot_normal(shape=(1, self.node_dim))
-            self.V_3_att = glorot_normal(shape=(self.hyperedge_dim, 1))
-            self.V_3_att_bias = tf.Variable(np.zeros(1, dtype=np.float32))
-            self.V_3_temperature = tf.Variable(np.ones(1, dtype=np.float32))
+            self.V_3_W = self.add_weight(shape=(V_3_W_in, self.node_dim))
+            self.V_3_b = self.add_weight(shape=(1, self.node_dim),
+                                         initializer="zeros")
+            self.attention_V_3 = self.add_attention(attention_type)
 
-            self.trainable_variables.extend([
-                self.E_3_W, self.E_3_b,
-                self.E_3_att, self.E_3_att_bias, self.E_3_temperature,
-                self.V_3_W, self.V_3_b,
-                self.V_3_att, self.V_3_att_bias, self.V_3_temperature
-            ])
-
-    def attention(self, seq, att, temperature, bias):
-        logits = tf.ragged.map_flat_values(tf.matmul, seq, att)
-        logits = temperature * self.attention_activation(logits + bias[0])
-
-        # numerical stability
-        logits -= tf.reduce_max(logits, axis=1, keepdims=True)
-        ai = tf.math.exp(logits)
-        att_weights = ai / tf.math.reduce_sum(ai, axis=1, keepdims=True)
-        weighted_input = seq * att_weights
-        result = tf.math.reduce_sum(weighted_input, axis=1)
-        return result
-
-    def call(self, V, V2E, E2V, hyperedges_type):
+    def call(self, V, V2E, E2V, hyperedges_type, return_node_embeddings=False):
         # hyperedges embedding
-        E_seq = tf.nn.embedding_lookup(V, E2V)
-        # E_pool = self.attention(E_seq, self.E_att,
-        #                         self.E_temperature, self.E_att_bias)
-        print(E_seq.dtype, E_seq.shape)
-        E_pool = self.attention_E_1(E_seq)
         E_type2vec = tf.nn.embedding_lookup(self.E_type, hyperedges_type)
+        E_seq = tf.nn.embedding_lookup(V, E2V)
+        E_pool = self.attention_E_1((E_seq, E_type2vec))
         E_concat = tf.concat([E_pool, E_type2vec], axis=-1)
         E = self.hyperedge_activation(tf.matmul(E_concat, self.E_W) + self.E_b)
 
         # nodes embedding
         V_seq = tf.nn.embedding_lookup(E, V2E)
+        # V_edge_type = tf.matmul(V, self.V_type)
         V_pool = self.attention_V_1(V_seq)
-        V_concat = tf.concat([V_pool, V], axis=-1)
+        if self.selfless:
+            V_concat = V_pool
+        else:
+            V_concat = tf.concat([V_pool, V], axis=-1)
         V_2 = self.node_activation(tf.matmul(V_concat, self.V_W) + self.V_b)
+        if return_node_embeddings and self.n_layers == 1:
+            return V_2
 
         if self.n_layers >= 2:
             # 2nd layer hyperedges embedding
+            E_2_type2vec = tf.nn.embedding_lookup(self.E_2_type, hyperedges_type)
             E_2_seq = tf.nn.embedding_lookup(V_2, E2V)
-            E_2_pool = self.attention(E_2_seq, self.E_2_att,
-                                      self.E_2_temperature, self.E_2_att_bias)
-            E_2_concat = tf.concat([E_2_pool, E_type2vec], axis=-1)
+            E_2_pool = self.attention_E_2((E_2_seq, E_2_type2vec))
+            E_2_concat = tf.concat([E_2_pool, E_2_type2vec], axis=-1)
             E_2 = self.hyperedge_activation(
                 tf.matmul(E_2_concat, self.E_2_W) + self.E_2_b)
 
             # 2nd layer nodes embedding
             V_2_seq = tf.nn.embedding_lookup(E_2, V2E)
-            V_2_pool = self.attention(V_2_seq, self.V_2_att,
-                                      self.V_2_temperature, self.V_2_att_bias)
-            V_2_concat = tf.concat([V_2_pool, V_2], axis=-1)
+            V_2_pool = self.attention_V_2(V_2_seq)
+            if self.selfless:
+                V_2_concat = V_2_pool
+            else:
+                V_2_concat = tf.concat([V_2_pool, V_2], axis=-1)
             V_3 = self.node_activation(
                 tf.matmul(V_2_concat, self.V_2_W) + self.V_2_b)
+            if return_node_embeddings and self.n_layers == 2:
+                return V_3
 
             if self.n_layers >= 3:
                 # 3rd layer hyperedges embedding
                 E_3_seq = tf.nn.embedding_lookup(V_3, E2V)
-                E_3_pool = self.attention(E_3_seq, self.E_3_att,
-                                          self.E_3_temperature,
-                                          self.E_3_att_bias)
+                E_3_pool = self.attention_E_3(E_3_seq)
                 E_3_concat = tf.concat([E_3_pool, E_type2vec], axis=-1)
                 E_3 = self.hyperedge_activation(
                     tf.matmul(E_3_concat, self.E_3_W) + self.E_3_b)
 
                 # 3rd layer nodes embedding
                 V_3_seq = tf.nn.embedding_lookup(E_3, V2E)
-                V_3_pool = self.attention(V_3_seq, self.V_3_att,
-                                          self.V_3_temperature,
-                                          self.V_3_att_bias)
+                V_3_pool = self.attention_V_3(V_3_seq)
                 V_3_concat = tf.concat([V_3_pool, V_3], axis=-1)
                 V_4 = self.node_activation(
                     tf.matmul(V_3_concat, self.V_3_W) + self.V_3_b)
+                if return_node_embeddings:
+                    return V_4
 
                 # get label
                 out = tf.nn.softmax(tf.matmul(V_4, self.W))
@@ -505,7 +498,7 @@ class HyperGNN:
         return opt
 
     def fit(
-        self, H, V, y, embedding_dim=None,
+        self, H, V, y,
         preprocessor=None,
         epochs=200, learning_rate=1e-3, optimizer="nadam",
         beta_1=.9, beta_2=.999, clipnorm=2,
@@ -590,6 +583,27 @@ class HyperGNN:
         # show best validation accuracy
         if validation_data is not None:
             print(f"[i] best_val_acc={best_val_acc:.3f}")
+    
+    def embedd(
+        self, H, V,
+        preprocessor=None,
+        epochs=200, learning_rate=1e-3, optimizer="nadam",
+        beta_1=.9, beta_2=.999, clipnorm=2,
+        metrics="accuracy"
+    ):
+        # self.selfless = True
+        y = {node: i for i, node in enumerate(H.nodes)}
+        self.fit(H, V, y,
+                 preprocessor=preprocessor,
+                 epochs=epochs,
+                 learning_rate=learning_rate,
+                 optimizer=optimizer,
+                 beta_1=beta_1,
+                 beta_2=beta_2,
+                 clipnorm=clipnorm,
+                 metrics=metrics,
+                 validation_data=None)
+        return self.get_node_embedding(H, V)
 
     def predict(self, H, V, as_dict=True):
         if V.dtype != np.float32:
@@ -608,6 +622,19 @@ class HyperGNN:
             res = {H.nodes[i]: label for i, label in enumerate(y_pred)}
             return res
         return y_pred
+
+    def get_node_embedding(self, H, V):
+        if V.dtype != np.float32:
+            V = V.astype(np.float32)
+
+        if hasattr(self, "preprocessor"):
+            V = self.preprocessor.predict(V, verbose=False)
+        
+        E2V = H.E2V  # hyperedge to vertices list
+        V2E = H.V2E  # vertice to hyperedges list
+        hyperedges_type = np.array(H.hyperedges_type, dtype=np.int32)
+        X = self.call(V, V2E, E2V, hyperedges_type, return_node_embeddings=True)
+        return X
 
     def save(self, filename):
         import pickle
@@ -654,20 +681,10 @@ def glorot_normal(shape):
                        dtype=np.float32)
 
 
-def get_weighted_attention(attention_initializer="glorot_uniform"):
-    return WeightedAttention(attention_initializer)
+def ragged_dot(a, b):
+    return tf.ragged.map_flat_values(tf.matmul, a, b)
 
 
-def get_multihead_self_attention(in_dim):
-    inp = tf.keras.layers.Input(
-        shape=(None, in_dim), ragged=True, dtype=np.float32)
-    x = tf.keras.layers.MultiHeadAttention(4, 24)(inp, inp, inp)
-    # out = WeightedAttention()(x)
-    model = tf.keras.Model(inp, x)
-    return model
-
-
-@tf.keras.utils.register_keras_serializable()
 class WeightedAttention(tf.keras.layers.Layer):
     def __init__(
             self,
@@ -686,16 +703,15 @@ class WeightedAttention(tf.keras.layers.Layer):
                                    shape=(dim, 1),
                                    initializer=self.attention_initializer)
         self.bias = self.add_weight(name="bias",
-                                    shape=(1,),
+                                    shape=(dim,),
                                     initializer="zeros")
         self.temperature = self.add_weight(name="temperature",
                                            shape=(1,),
                                            initializer="ones")
 
     def call(self, seq):
-        logits = tf.ragged.map_flat_values(tf.matmul, seq, self.att)
-        logits = self.temperature * self.attention_activation(
-            logits + self.bias[0])
+        logits = ragged_dot(seq, self.att)
+        logits = self.temperature * logits
 
         # numerical stability
         logits -= tf.reduce_max(logits, axis=1, keepdims=True)
@@ -703,6 +719,150 @@ class WeightedAttention(tf.keras.layers.Layer):
         att_weights = ai / tf.math.reduce_sum(ai, axis=1, keepdims=True)
         weighted_input = seq * att_weights
         result = tf.math.reduce_sum(weighted_input, axis=1)
+        return result
+
+    def get_config(self):
+        config = super(WeightedAttention, self).get_config()
+        config.update({"hidden_dim": self.hidden_dim,
+                       "bias_regularizer": self.bias_regularizer,
+                       "attention_initializer": self.attention_initializer,
+                       "attention_activation": self.attention_activation,
+                       "attention_regularizer": self.attention_regularizer})
+        return config
+
+    @classmethod
+    def from_config(cls, config):
+        return cls(**config)
+
+
+class AdaptiveAttention(tf.keras.layers.Layer):
+    def __init__(
+            self,
+            attention_initializer="glorot_uniform",
+            attention_activation=None,
+            **kwargs):
+
+        super().__init__(**kwargs)
+        self.attention_activation = tf.keras.activations.get(
+            attention_activation)
+        self.attention_initializer = attention_initializer
+
+    def build(self, input_shapes):
+        input_shape, embedding_shape = input_shapes
+        dim = int(input_shape[-1])
+        latent_dim = int(embedding_shape[-1])
+        self.W = self.add_weight(name="W",
+                                   shape=(dim, latent_dim),
+                                   initializer=self.attention_initializer)
+        self.bias = self.add_weight(name="bias",
+                                    shape=(dim,),
+                                    initializer="zeros")
+        self.temperature = self.add_weight(name="temperature",
+                                           shape=(1,),
+                                           initializer="ones")
+
+    def call(self, inputs):
+        seq, embedding = inputs
+        logits = ragged_dot(seq, self.W)
+        logits = logits * embedding[:, None, :]
+        logits = tf.reduce_sum(logits, axis=-1, keepdims=True)
+        logits = self.temperature * logits
+
+        # numerical stability
+        logits -= tf.reduce_max(logits, axis=1, keepdims=True)
+        ai = tf.math.exp(logits)
+        att_weights = ai / tf.math.reduce_sum(ai, axis=1, keepdims=True)
+        weighted_input = seq * att_weights
+        result = tf.math.reduce_sum(weighted_input, axis=1)
+        return result
+
+    def get_config(self):
+        config = super(WeightedAttention, self).get_config()
+        config.update({"hidden_dim": self.hidden_dim,
+                       "bias_regularizer": self.bias_regularizer,
+                       "attention_initializer": self.attention_initializer,
+                       "attention_activation": self.attention_activation,
+                       "attention_regularizer": self.attention_regularizer})
+        return config
+
+    @classmethod
+    def from_config(cls, config):
+        return cls(**config)
+
+
+class NewAttention(tf.keras.layers.Layer):
+    def __init__(
+            self,
+            attention_initializer="glorot_uniform",
+            attention_activation=None,
+            **kwargs):
+
+        super().__init__(**kwargs)
+        self.attention_activation = tf.keras.activations.get(
+            attention_activation)
+        self.attention_initializer = attention_initializer
+
+    def build(self, input_shape):
+        dim = int(input_shape[-1])
+        self.att = self.add_weight(name="att",
+                                   shape=(dim, dim),
+                                   initializer=self.attention_initializer)
+        self.temperature = self.add_weight(name="temperature",
+                                           shape=(1, dim),
+                                           initializer="ones")
+
+    def call(self, seq):
+        logits = self.temperature * ragged_dot(seq, self.att)
+        logits -= tf.reduce_max(logits, axis=1, keepdims=True)
+        ai = tf.exp(logits)
+        att_weights = ai / tf.math.reduce_sum(ai, axis=1, keepdims=True)
+
+        # numerical stability
+        weighted_input = seq * att_weights
+        result = tf.math.reduce_sum(weighted_input, axis=1)
+        return result
+
+
+class New2Attention(tf.keras.layers.Layer):
+    def __init__(
+            self,
+            latent_dim=256,
+            attention_initializer="glorot_uniform",
+            attention_activation=None,
+            **kwargs):
+
+        super().__init__(**kwargs)
+        self.attention_activation = tf.keras.activations.get(
+            attention_activation)
+        self.attention_initializer = attention_initializer
+        self.latent_dim = latent_dim
+
+    def build(self, input_shape):
+        dim = int(input_shape[-1])
+        self.key = self.add_weight(name="key",
+                                 shape=(dim, self.latent_dim),
+                                 initializer=self.attention_initializer)
+        self.query = self.add_weight(name="query",
+                                   shape=(dim, self.latent_dim),
+                                   initializer=self.attention_initializer)
+        self.value = self.add_weight(name="value",
+                                     shape=(self.latent_dim, dim))
+        self.temperature = self.add_weight(name="temperature",
+                                           shape=(1, self.latent_dim),
+                                           initializer="ones")
+
+    def call(self, seq):
+        keys = ragged_dot(seq, self.key)
+        
+        logits = self.temperature * ragged_dot(seq, self.query)
+        logits -= tf.reduce_max(logits, axis=1, keepdims=True)
+        ai = tf.exp(logits)
+        att_weights = ai / tf.math.reduce_sum(ai, axis=1, keepdims=True)
+
+        # numerical stability
+        weighted_input = keys * att_weights
+        result = tf.math.reduce_sum(weighted_input, axis=1)
+        result = ragged_dot(result, self.value)
         return result
 
     def get_config(self):
