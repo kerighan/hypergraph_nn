@@ -7,24 +7,31 @@ from hypergnn import HyperGNN, HyperGraph, split_train_test
 
 # load data
 G, V, y = load_citeseer()
-y_train, y_test = split_train_test(y, .4, random_state=0)
+y_train, y_test = split_train_test(y, .4)
 
 # create hypergraph from graph
 H = HyperGraph(G, methods=[
-    "neighbors", "louvain", "self", "infomap", "onion_layers"])
+    "neighbors",
+    "louvain",
+    "infomap",
+    "self",
+    "isolates",
+    "onion_layers",
+])
 
 # create and fit model
-model = HyperGNN(hyperedge_type_dim=32,
-                 hyperedge_dim=256,
-                 node_dim=256,
+model = HyperGNN(hyperedge_type_dim=64,
+                 hyperedge_dim=768,
+                 node_dim=768,
                  node_activation="tanh",
                  hyperedge_activation="tanh",
-                 n_layers=1)
+                 pooling="key_query",
+                 n_layers=2)
 model.fit(H, V, y_train,
           validation_data=y_test,
           learning_rate=1e-3,
           optimizer="nadam",
-          epochs=30)
+          epochs=50)
 
 model.save("model.p")  # persist model to disk
 model = HyperGNN.load("model.p")  # model load
