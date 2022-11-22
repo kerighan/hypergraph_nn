@@ -275,6 +275,14 @@ class HyperGraph:
     def E2V(self):
         return tf.ragged.constant(self.hyperedges, dtype=np.int32)
 
+    @property
+    def n_hyperedges(self):
+        return len(self.hyperedges)
+
+    def __repr__(self):
+        return (f"Hypergraph with {self.n_nodes} nodes and "
+                f"{self.n_hyperedges} hyperedges")
+
     def save(self, filename):
         import pickle
         pickle.dump(self, open(filename, "wb"))
@@ -288,14 +296,13 @@ class HyperGraph:
 class HyperGNN:
     def __init__(
         self,
-        hyperedge_type_dim=4,
-        hyperedge_dim=32,
-        node_dim=32,
-        hyperedge_activation="relu",
-        node_activation="relu",
-        attention_activation="relu",
-        pooling="average",
-        n_layers=1,
+        hyperedge_type_dim=64,
+        hyperedge_dim=256,
+        node_dim=256,
+        hyperedge_activation="tanh",
+        node_activation="tanh",
+        pooling="key_query",
+        n_layers=2,
         selfless=False
     ):
         # dimensionality
@@ -310,8 +317,6 @@ class HyperGNN:
         self.hyperedge_activation = (
             tf.keras.activations.get(hyperedge_activation))
         self.node_activation = tf.keras.activations.get(node_activation)
-        self.attention_activation = (
-            tf.keras.activations.get(attention_activation))
 
     def add_weight(self, shape, initializer="glorot_normal"):
         if initializer == "glorot_normal":
@@ -517,6 +522,8 @@ class HyperGNN:
         beta_1=.9, beta_2=.999, clipnorm=2,
         metrics="accuracy", validation_data=None
     ):
+        self.trainable_variables = []
+
         # prepare training set
         n_labels = int(np.max(list(y.values())) + 1)
         y_true = np.zeros((H.n_nodes, n_labels), dtype=np.bool_)
@@ -604,7 +611,8 @@ class HyperGNN:
         beta_1=.9, beta_2=.999, clipnorm=2,
         metrics="accuracy"
     ):
-        # self.selfless = True
+        self.trainable_variables = []
+
         y = {node: i for i, node in enumerate(H.nodes)}
         self.fit(H, V, y,
                  preprocessor=preprocessor,
